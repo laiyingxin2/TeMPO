@@ -1,5 +1,12 @@
 # TeMPO: Frame-Causal Token Compression for Video Reasoning
 
+<p align="center">
+  <b>NeurIPS 2026</b> ·
+  <a href="https://laiyingxin2.github.io/TeMPO/">🌐 Project Page</a> ·
+  <a href="#-citation">📚 Citation</a> ·
+  <a href="LICENSE">⚖️ Apache-2.0</a>
+</p>
+
 Official implementation of **TeMPO**, a training-free, frame-causal visual token compression framework for video large language models (VLLMs).
 
 > Existing training-free token compressors make retention decisions frame-locally, so selectors with different scoring rules repeatedly retain overlapping token supports across neighboring frames (**Selector Collapse**), spending the limited token budget on visual evidence already delivered to the language model. TeMPO turns frame-wise selection into a frame-causal decision process with three plug-and-play components: **committed-support memory** (CSM), **residual-energy greedy selection**, and **parameter-free neighborhood fusion** — no retraining, no backbone modification, no additional token budget.
