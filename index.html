@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TeMPO — Frame-Causal Token Compression for Video LLMs</title>
+<meta name="description" content="TeMPO is a training-free, frame-causal visual token compressor for video large language models. It remembers the support already delivered to the LLM and spends the token budget on fresh evidence. NeurIPS 2026.">
+<meta property="og:title" content="TeMPO — Frame-Causal Token Compression for Video LLMs">
+<meta property="og:description" content="Stop paying for the same tokens, frame after frame. Training-free. One line to integrate. NeurIPS 2026.">
+<meta property="og:image" content="https://raw.githubusercontent.com/laiyingxin2/TeMPO/main/imgs/framework.png">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%236d7cff'/%3E%3Cstop offset='1' stop-color='%233ee6ff'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Ctext x='32' y='44' font-family='Arial,sans-serif' font-size='36' font-weight='700' fill='%2306080f' text-anchor='middle'%3ET%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#06080f; --bg2:#090d18;
+  --panel:rgba(255,255,255,.035); --panel2:rgba(255,255,255,.06);
+  --line:rgba(255,255,255,.09); --line2:rgba(255,255,255,.16);
+  --ink:#e9edf5; --mut:#98a3b8; --dim:#5f6a80;
+  --indigo:#6d7cff; --cyan:#3ee6ff; --green:#3ddc97; --rose:#ff5d7a; --amber:#ffc24b;
+  --grad:linear-gradient(100deg,#6d7cff 0%,#3ee6ff 100%);
+  --rad:18px; --radS:12px;
+  --font:'Inter',system-ui,sans-serif; --disp:'Space Grotesk',var(--font); --mono:'JetBrains Mono',ui-monospace,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:84px}
+body{background:var(--bg);color:var(--ink);font-family:var(--font);font-size:16px;line-height:1.6;overflow-x:hidden}
+::selection{background:rgba(109,124,255,.4)}
+a{color:inherit;text-decoration:none}
+button{font-family:inherit;cursor:pointer}
+
+/* ---------- backdrop ---------- */
+.sky{position:fixed;inset:0;z-index:-2;background:
+  radial-gradient(900px 500px at 15% -5%,rgba(109,124,255,.16),transparent 60%),
+  radial-gradient(800px 460px at 85% 0%,rgba(62,230,255,.10),transparent 60%),
+  radial-gradient(700px 500px at 50% 110%,rgba(109,124,255,.08),transparent 60%),var(--bg)}
+.gridlines{position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.5;
+  background-image:linear-gradient(rgba(255,255,255,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.03) 1px,transparent 1px);
+  background-size:44px 44px;
+  -webkit-mask-image:radial-gradient(1200px 700px at 50% 0%,#000 30%,transparent 75%);
+  mask-image:radial-gradient(1200px 700px at 50% 0%,#000 30%,transparent 75%)}
+.blob{position:absolute;border-radius:50%;filter:blur(90px);opacity:.5;pointer-events:none;z-index:0}
+@keyframes drift{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(40px,-30px) scale(1.12)}}
+
+/* ---------- shells ---------- */
+.wrap{max-width:1120px;margin:0 auto;padding:0 24px;position:relative;z-index:1}
+section{padding:92px 0}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--cyan)}
+.eyebrow::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--grad);box-shadow:0 0 12px rgba(62,230,255,.8)}
+h2{font-family:var(--disp);font-size:clamp(28px,4vw,42px);line-height:1.15;letter-spacing:-.01em;margin:14px 0 12px;font-weight:700}
+.sub{color:var(--mut);max-width:680px;font-size:17px}
+.gtext{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+
+/* reveal on scroll */
+.rv{opacity:0;transform:translateY(26px);transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1)}
+.rv.in{opacity:1;transform:none}
+.rv.d1{transition-delay:.08s}.rv.d2{transition-delay:.16s}.rv.d3{transition-delay:.24s}
+
+/* ---------- nav ---------- */
+nav{position:fixed;top:0;left:0;right:0;z-index:50;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  background:rgba(6,8,15,.6);border-bottom:1px solid rgba(255,255,255,.06)}
+.navin{max-width:1120px;margin:0 auto;padding:0 24px;height:64px;display:flex;align-items:center;gap:26px}
+.logo{display:flex;align-items:center;gap:10px;font-family:var(--disp);font-weight:700;font-size:18px;letter-spacing:.01em}
+.logo .cube{width:26px;height:26px;border-radius:7px;background:var(--grad);display:grid;place-items:center;color:#06080f;font-size:15px;font-weight:700;box-shadow:0 0 18px rgba(109,124,255,.55)}
+.navlinks{display:flex;gap:22px;margin-left:auto;font-size:14px;color:var(--mut)}
+.navlinks a{transition:color .2s}
+.navlinks a:hover{color:var(--ink)}
+.ghbtn{margin-left:8px;display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:600;padding:8px 16px;border-radius:999px;border:1px solid var(--line2);background:var(--panel2);transition:.2s}
+.ghbtn:hover{border-color:rgba(255,255,255,.35);transform:translateY(-1px)}
+@media(max-width:860px){.navlinks{display:none}}
+
+/* ---------- hero ---------- */
+.hero{padding:170px 0 90px;text-align:center;position:relative}
+.badge{display:inline-flex;align-items:center;gap:10px;padding:7px 16px;border-radius:999px;border:1px solid var(--line2);
+  background:rgba(255,255,255,.04);font-size:13px;color:var(--mut);font-weight:500}
+.badge b{color:var(--ink);font-weight:600}
+.badge .dotsep{width:3px;height:3px;border-radius:50%;background:var(--dim)}
+.badge .neu{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:700;letter-spacing:.02em}
+h1{font-family:var(--disp);font-weight:700;font-size:clamp(38px,6.4vw,72px);line-height:1.06;letter-spacing:-.025em;margin:26px auto 20px;max-width:900px}
+.hero .sub{margin:0 auto 34px;font-size:18px;max-width:640px}
+.ctas{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:9px;padding:13px 26px;border-radius:12px;font-weight:600;font-size:15px;transition:.22s;border:1px solid transparent}
+.btn.primary{background:var(--grad);color:#05070d;box-shadow:0 8px 30px rgba(89,140,255,.35)}
+.btn.primary:hover{transform:translateY(-2px);box-shadow:0 12px 40px rgba(89,140,255,.5)}
+.btn.ghost{border-color:var(--line2);background:var(--panel);color:var(--ink)}
+.btn.ghost:hover{border-color:rgba(255,255,255,.35);transform:translateY(-2px)}
+.typechip{margin:40px auto 0;max-width:460px;border:1px solid var(--line2);border-radius:14px;background:rgba(10,13,22,.85);
+  padding:15px 20px;font-family:var(--mono);font-size:14.5px;text-align:left;display:flex;gap:12px;align-items:center;
+  box-shadow:0 20px 60px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.05)}
+.typechip .tdots{display:flex;gap:5px}
+.typechip .tdots i{width:9px;height:9px;border-radius:50%;background:#2a3246}
+.typechip code{color:var(--mut)}
+.typechip code .k{color:var(--indigo)}.typechip code .f{color:var(--cyan)}.typechip code .c{color:var(--dim)}
+.caret{display:inline-block;width:8px;height:16px;background:var(--cyan);vertical-align:-2px;animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:64px}
+.stat{border:1px solid var(--line);border-radius:var(--rad);background:var(--panel);padding:22px 10px;transition:.25s}
+.stat:hover{border-color:var(--line2);transform:translateY(-3px)}
+.stat .n{font-family:var(--disp);font-size:34px;font-weight:700;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.stat .l{font-size:13px;color:var(--mut);margin-top:4px}
+@media(max-width:720px){.stats{grid-template-columns:repeat(2,1fr)}}
+
+/* ---------- demo player ---------- */
+.player{margin-top:44px;border:1px solid var(--line2);border-radius:22px;background:linear-gradient(180deg,rgba(14,18,30,.9),rgba(9,12,20,.92));
+  box-shadow:0 30px 90px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.06);overflow:hidden}
+.player-top{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.extab{display:inline-flex;align-items:center;gap:8px;padding:8px 15px;border-radius:999px;border:1px solid var(--line);
+  background:transparent;color:var(--mut);font-size:13.5px;font-weight:500;transition:.2s}
+.extab:hover{color:var(--ink);border-color:var(--line2)}
+.extab.on{background:rgba(109,124,255,.14);border-color:rgba(109,124,255,.5);color:var(--ink)}
+.player-ctl{margin-left:auto;display:flex;gap:8px;align-items:center}
+.pbtn{width:34px;height:34px;border-radius:9px;border:1px solid var(--line2);background:var(--panel2);color:var(--ink);font-size:13px;display:grid;place-items:center;transition:.2s}
+.pbtn:hover{border-color:rgba(255,255,255,.35)}
+.player-body{display:grid;grid-template-columns:1.25fr 1fr;gap:0}
+@media(max-width:900px){.player-body{grid-template-columns:1fr}}
+.pb-left{padding:24px;border-right:1px solid var(--line)}
+@media(max-width:900px){.pb-left{border-right:0;border-bottom:1px solid var(--line)}}
+.pb-right{padding:24px;display:flex;flex-direction:column}
+.strip{display:grid;grid-template-columns:repeat(6,1fr);gap:9px}
+.fr{aspect-ratio:4/3;border-radius:10px;border:1px solid var(--line);display:grid;place-items:center;font-size:26px;position:relative;
+  background:linear-gradient(145deg,rgba(109,124,255,.10),rgba(62,230,255,.05));transition:.3s;filter:saturate(.5) brightness(.75)}
+.fr .fi{position:absolute;bottom:4px;right:7px;font-family:var(--mono);font-size:9.5px;color:var(--dim)}
+.fr.cur{border-color:rgba(62,230,255,.7);box-shadow:0 0 0 1px rgba(62,230,255,.4),0 0 24px rgba(62,230,255,.25);filter:none;transform:translateY(-3px)}
+.fr.done{filter:none;opacity:.85}
+.gridwrap{margin-top:20px;display:flex;gap:20px;align-items:flex-start}
+.tgrid{display:grid;grid-template-columns:repeat(8,1fr);gap:3px;width:min(236px,46vw);flex:none}
+.tc{aspect-ratio:1;border-radius:3px;background:rgba(255,255,255,.055);transition:background .25s,box-shadow .25s}
+.tc.sal{background:rgba(109,124,255,.22)}
+.tc.keep{background:var(--green);box-shadow:0 0 8px rgba(61,220,151,.7)}
+.tc.drop{background:rgba(255,255,255,.14)}
+.gside{flex:1;min-width:0}
+.gside h4{font-size:13px;font-weight:600;color:var(--mut);text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px;font-family:var(--mono)}
+.meter{height:9px;border-radius:99px;background:rgba(255,255,255,.07);overflow:hidden;margin:6px 0 14px}
+.meter i{display:block;height:100%;border-radius:99px;background:var(--grad);width:0%;transition:width .5s cubic-bezier(.2,.7,.2,1)}
+.kv{font-family:var(--mono);font-size:12.5px;color:var(--mut);display:flex;justify-content:space-between;margin-bottom:6px}
+.kv b{color:var(--ink);font-weight:600}
+.memrow{display:flex;gap:3px;flex-wrap:wrap;margin-top:4px}
+.memrow i{width:9px;height:9px;border-radius:2.5px;background:rgba(62,230,255,.18);transition:.3s}
+.memrow i.on{background:var(--cyan);box-shadow:0 0 7px rgba(62,230,255,.65)}
+.stages{display:flex;gap:8px;margin-bottom:18px}
+.stage{flex:1;text-align:center;padding:8px 4px;border-radius:9px;border:1px solid var(--line);font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;color:var(--dim);text-transform:uppercase;transition:.3s}
+.stage.on{border-color:rgba(62,230,255,.55);color:var(--cyan);background:rgba(62,230,255,.07);box-shadow:0 0 16px rgba(62,230,255,.12)}
+.stage.done{color:var(--green);border-color:rgba(61,220,151,.4)}
+.chat{flex:1;display:flex;flex-direction:column;gap:12px}
+.bub{max-width:92%;padding:12px 16px;border-radius:14px;font-size:14.5px;line-height:1.55}
+.bub.q{align-self:flex-end;background:rgba(109,124,255,.16);border:1px solid rgba(109,124,255,.35);border-bottom-right-radius:4px}
+.bub.a{align-self:flex-start;background:var(--panel2);border:1px solid var(--line);border-bottom-left-radius:4px;min-height:46px}
+.bub.a .who{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;color:var(--cyan);text-transform:uppercase;margin-bottom:6px}
+.bub.a .who i{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 8px rgba(61,220,151,.8);animation:blink 1.2s steps(1) infinite}
+.sim-note{font-size:12px;color:var(--dim);padding:12px 18px;border-top:1px solid var(--line);font-family:var(--mono)}
+
+/* ---------- collapse sim ---------- */
+.duo{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:40px}
+@media(max-width:860px){.duo{grid-template-columns:1fr}}
+.simcard{border:1px solid var(--line);border-radius:var(--rad);background:var(--panel);padding:22px;transition:.25s}
+.simcard.bad{border-top:2px solid rgba(255,93,122,.55)}
+.simcard.good{border-top:2px solid rgba(61,220,151,.6)}
+.simhead{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px;gap:8px;flex-wrap:wrap}
+.simhead h3{font-family:var(--disp);font-size:17px;font-weight:600}
+.simhead .tag{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;padding:4px 10px;border-radius:99px}
+.simcard.bad .tag{color:var(--rose);background:rgba(255,93,122,.1);border:1px solid rgba(255,93,122,.3)}
+.simcard.good .tag{color:var(--green);background:rgba(61,220,151,.1);border:1px solid rgba(61,220,151,.3)}
+.cgrid{display:grid;grid-template-columns:repeat(12,1fr);gap:2.5px}
+.cc{aspect-ratio:1;border-radius:2.5px;background:rgba(255,255,255,.05);position:relative;transition:background .3s}
+.cc.ever::after{content:"";position:absolute;inset:38%;border-radius:50%;background:rgba(255,255,255,.22)}
+.cc.fresh{background:var(--green);box-shadow:0 0 6px rgba(61,220,151,.55)}
+.cc.reuse{background:var(--rose);box-shadow:0 0 6px rgba(255,93,122,.55)}
+.simfoot{display:flex;gap:10px;margin-top:14px;font-family:var(--mono);font-size:12.5px;flex-wrap:wrap}
+.pill{padding:5px 12px;border-radius:99px;border:1px solid var(--line);color:var(--mut)}
+.pill b{font-weight:600}
+.pill.r b{color:var(--rose)} .pill.g b{color:var(--green)}
+.simbar{display:flex;align-items:center;gap:14px;margin-top:26px;flex-wrap:wrap}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--mut);margin-left:auto}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:10px;height:10px;border-radius:3px}
+.framecount{font-family:var(--mono);font-size:13px;color:var(--mut)}
+
+/* ---------- method ---------- */
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:44px}
+@media(max-width:860px){.steps{grid-template-columns:1fr}}
+.step{position:relative;border:1px solid var(--line);border-radius:var(--rad);background:var(--panel);padding:28px 24px;overflow:hidden;transition:.25s}
+.step:hover{border-color:var(--line2);transform:translateY(-4px)}
+.step .num{font-family:var(--mono);font-size:12px;color:var(--cyan);letter-spacing:.2em}
+.step h3{font-family:var(--disp);font-size:20px;margin:10px 0 8px;font-weight:600}
+.step p{color:var(--mut);font-size:14.5px}
+.step .art{height:96px;margin-bottom:14px;display:grid;place-items:center}
+@keyframes pulse{0%,100%{opacity:.5;transform:scale(1)}50%{opacity:1;transform:scale(1.08)}}
+@keyframes slideIn{from{transform:translateX(-8px);opacity:0}to{transform:none;opacity:1}}
+.art svg{overflow:visible}
+.art .pul{animation:pulse 2.4s ease-in-out infinite}
+.art .pul2{animation:pulse 2.4s ease-in-out .5s infinite}
+.art .pul3{animation:pulse 2.4s ease-in-out 1s infinite}
+
+/* ---------- pipeline ---------- */
+.window{margin-top:44px;border:1px solid var(--line2);border-radius:18px;overflow:hidden;background:#0a0e18;
+  box-shadow:0 40px 110px rgba(0,0,0,.55);transition:transform .15s ease-out;transform-style:preserve-3d;will-change:transform}
+.winbar{display:flex;align-items:center;gap:7px;padding:12px 16px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.025)}
+.winbar i{width:11px;height:11px;border-radius:50%}
+.winbar i:nth-child(1){background:#ff5f57}.winbar i:nth-child(2){background:#febc2e}.winbar i:nth-child(3){background:#28c840}
+.winbar span{margin-left:10px;font-family:var(--mono);font-size:12px;color:var(--dim)}
+.window img{display:block;width:100%;height:auto;background:#fff}
+
+/* ---------- features ---------- */
+.feats{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:44px}
+@media(max-width:900px){.feats{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:640px){.feats{grid-template-columns:1fr}}
+.feat{position:relative;border:1px solid var(--line);border-radius:var(--rad);background:var(--panel);padding:26px 22px;overflow:hidden;transition:.25s}
+.feat::before{content:"";position:absolute;inset:0;border-radius:inherit;opacity:0;transition:opacity .3s;
+  background:radial-gradient(240px 240px at var(--mx,50%) var(--my,50%),rgba(109,124,255,.14),transparent 70%)}
+.feat:hover{border-color:var(--line2)}
+.feat:hover::before{opacity:1}
+.feat .ico{width:42px;height:42px;border-radius:11px;background:rgba(109,124,255,.12);border:1px solid rgba(109,124,255,.3);display:grid;place-items:center;font-size:19px;margin-bottom:14px}
+.feat h3{font-family:var(--disp);font-size:17px;font-weight:600;margin-bottom:6px}
+.feat p{color:var(--mut);font-size:14px}
+
+/* ---------- quickstart ---------- */
+.codebox{margin-top:40px;border:1px solid var(--line2);border-radius:16px;overflow:hidden;background:#0a0e18;box-shadow:0 24px 70px rgba(0,0,0,.45)}
+.tabs{display:flex;border-bottom:1px solid var(--line);background:rgba(255,255,255,.02)}
+.tab{padding:13px 22px;font-size:13.5px;font-weight:500;color:var(--mut);border:0;background:none;border-bottom:2px solid transparent;transition:.2s}
+.tab:hover{color:var(--ink)}
+.tab.on{color:var(--ink);border-bottom-color:var(--cyan)}
+.copy{margin-left:auto;align-self:center;margin-right:12px;font-family:var(--mono);font-size:11.5px;color:var(--mut);border:1px solid var(--line);background:var(--panel);padding:6px 13px;border-radius:8px;transition:.2s}
+.copy:hover{color:var(--ink);border-color:var(--line2)}
+.codes pre{display:none;padding:24px 26px;overflow-x:auto;font-family:var(--mono);font-size:13.8px;line-height:1.75;color:#c6d0e2}
+.codes pre.on{display:block}
+.codes .cm{color:#5f6a80}.codes .kw{color:#8b96ff}.codes .st{color:#7ee2a8}.codes .fn{color:#3ee6ff}.codes .nm{color:#ffc24b}
+
+/* ---------- config ---------- */
+.conf{margin-top:40px;border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.confrow{display:grid;grid-template-columns:230px 110px 1fr;gap:14px;padding:17px 22px;border-bottom:1px solid var(--line);transition:background .2s;align-items:baseline}
+.confrow:last-child{border-bottom:0}
+.confrow:hover{background:rgba(255,255,255,.025)}
+.confrow.head{background:rgba(255,255,255,.03);font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+.confrow code{font-family:var(--mono);font-size:13.5px;color:var(--cyan)}
+.confrow .def{font-family:var(--mono);font-size:13px;color:var(--amber)}
+.confrow .desc{color:var(--mut);font-size:14px}
+@media(max-width:720px){.confrow{grid-template-columns:1fr;gap:3px}}
+
+/* ---------- citation / footer ---------- */
+.cite{margin-top:36px;position:relative;border:1px solid var(--line2);border-radius:16px;background:#0a0e18;padding:26px 28px;font-family:var(--mono);font-size:13px;line-height:1.8;color:#b9c3d6;overflow-x:auto}
+.cite .copy{position:absolute;top:14px;right:14px;margin:0}
+footer{border-top:1px solid var(--line);padding:46px 0 60px;margin-top:40px}
+footer .frow{display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap;color:var(--mut);font-size:14px}
+footer a{color:var(--ink);transition:color .2s}
+footer a:hover{color:var(--cyan)}
+.toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(20px);background:#11182a;border:1px solid var(--line2);
+  color:var(--ink);padding:10px 22px;border-radius:99px;font-size:13.5px;opacity:0;pointer-events:none;transition:.3s;z-index:99;box-shadow:0 10px 40px rgba(0,0,0,.5)}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<div class="sky"></div>
+<div class="gridlines"></div>
+
+<nav>
+  <div class="navin">
+    <a class="logo" href="#top"><span class="cube">T</span>TeMPO</a>
+    <div class="navlinks">
+      <a href="#demo">Demo</a><a href="#problem">Problem</a><a href="#method">Method</a>
+      <a href="#pipeline">Pipeline</a><a href="#quickstart">Quick&nbsp;start</a><a href="#config">Config</a><a href="#citation">Citation</a>
+    </div>
+    <a class="ghbtn" href="https://github.com/laiyingxin2/TeMPO" target="_blank" rel="noopener">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.5 7.5 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+      GitHub
+    </a>
+  </div>
+</nav>
+
+<!-- ================= HERO ================= -->
+<header class="hero wrap" id="top">
+  <div class="blob" style="width:420px;height:420px;background:#6d7cff;top:-80px;left:-120px;animation:drift 14s ease-in-out infinite"></div>
+  <div class="blob" style="width:360px;height:360px;background:#3ee6ff;top:-40px;right:-100px;opacity:.3;animation:drift 18s ease-in-out 2s infinite"></div>
+
+  <div class="rv"><span class="badge"><span class="neu">NeurIPS 2026</span><span class="dotsep"></span><b>Training-free</b><span class="dotsep"></span>Plug-and-play<span class="dotsep"></span>Apache-2.0</span></div>
+  <h1 class="rv d1">Stop paying for the <span class="gtext">same tokens</span>, frame after frame.</h1>
+  <p class="sub rv d2">TeMPO is a frame-causal token compressor for video LLMs. It remembers the visual support already delivered to the language model — and spends your token budget only on <b style="color:var(--ink)">fresh evidence</b>. No retraining. No backbone changes. No extra budget.</p>
+  <div class="ctas rv d3">
+    <a class="btn primary" href="https://github.com/laiyingxin2/TeMPO" target="_blank" rel="noopener">★ Get it on GitHub</a>
+    <a class="btn ghost" href="#demo">▶ Watch it think</a>
+  </div>
+
+  <div class="typechip rv d3">
+    <span class="tdots"><i></i><i></i><i></i></span>
+    <code id="typecode"></code>
+  </div>
+
+  <div class="stats">
+    <div class="stat rv"><div class="n">1</div><div class="l">line to integrate</div></div>
+    <div class="stat rv d1"><div class="n">0</div><div class="l">training steps</div></div>
+    <div class="stat rv d2"><div class="n">5</div><div class="l">video benchmarks wired in</div></div>
+    <div class="stat rv d3"><div class="n">2</div><div class="l">backbones supported</div></div>
+  </div>
+</header>
+
+<!-- ================= INFERENCE DEMO ================= -->
+<section id="demo">
+  <div class="wrap">
+    <div class="rv"><span class="eyebrow">Live walkthrough</span></div>
+    <h2 class="rv d1">Watch TeMPO <span class="gtext">think</span>.</h2>
+    <p class="sub rv d2">Pick a scenario. TeMPO sweeps the sampled frames once — compressing each one against its committed-support memory — then hands the language model a fraction of the tokens and answers the question.</p>
+
+    <div class="player rv d2">
+      <div class="player-top" id="extabs"></div>
+      <div class="player-body">
+        <div class="pb-left">
+          <div class="strip" id="strip"></div>
+          <div class="gridwrap">
+            <div class="tgrid" id="dgrid" aria-label="token selection grid"></div>
+            <div class="gside">
+              <h4>Token budget</h4>
+              <div class="kv"><span>retention</span><b>10%</b></div>
+              <div class="kv"><span>tokens / frame</span><b><span id="kept">0</span> / 729</b></div>
+              <div class="meter"><i id="budgetbar"></i></div>
+              <div class="kv"><span>delivered to LLM</span><b id="delivered">0</b></div>
+              <h4 style="margin-top:16px">Committed-support memory</h4>
+              <div class="memrow" id="memrow"></div>
+            </div>
+          </div>
+        </div>
+        <div class="pb-right">
+          <div class="stages">
+            <div class="stage" id="st-compress">Compress</div>
+            <div class="stage" id="st-prefill">Prefill</div>
+            <div class="stage" id="st-decode">Decode</div>
+          </div>
+          <div class="chat">
+            <div class="bub q" id="qbub"></div>
+            <div class="bub a"><div class="who"><i></i>TeMPO · 10% tokens</div><span id="abub"></span><span class="caret" id="acaret" style="display:none"></span></div>
+          </div>
+        </div>
+      </div>
+      <div class="sim-note">⌁ scripted walkthrough for illustration — run <b style="color:var(--mut)">demo.py</b> in the repo for real inference</div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= PROBLEM ================= -->
+<section id="problem" style="background:linear-gradient(180deg,transparent,rgba(255,93,122,.025),transparent)">
+  <div class="wrap">
+    <div class="rv"><span class="eyebrow" style="color:var(--rose)">The problem</span></div>
+    <h2 class="rv d1">Selector Collapse: compressors keep <span style="color:var(--rose)">re-buying</span> the same pixels.</h2>
+    <p class="sub rv d2">Frame-local selectors reset their state every frame. Whatever the scoring rule — attention, diversity, temporal statistics — they keep retaining token supports that overlap with what earlier frames already committed to the LLM. The budget goes to evidence the model has already seen.</p>
+
+    <div class="duo">
+      <div class="simcard bad rv">
+        <div class="simhead"><h3>Frame-local selector</h3><span class="tag">no memory</span></div>
+        <div class="cgrid" id="gridA"></div>
+        <div class="simfoot">
+          <span class="pill r">♻ reused <b id="reuseA">0</b></span>
+          <span class="pill g">✦ fresh <b id="freshA">0</b></span>
+        </div>
+      </div>
+      <div class="simcard good rv d1">
+        <div class="simhead"><h3>TeMPO</h3><span class="tag">committed-support memory</span></div>
+        <div class="cgrid" id="gridB"></div>
+        <div class="simfoot">
+          <span class="pill r">♻ reused <b id="reuseB">0</b></span>
+          <span class="pill g">✦ fresh <b id="freshB">0</b></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="simbar rv">
+      <button class="pbtn" id="simplay" aria-label="play / pause">⏸</button>
+      <span class="framecount">frame <b id="simframe" style="color:var(--ink)">0</b> — same video, same budget, same salience</span>
+      <div class="legend">
+        <span><i style="background:var(--green)"></i>fresh pick</span>
+        <span><i style="background:var(--rose)"></i>reused pick</span>
+        <span><i style="background:rgba(109,124,255,.35)"></i>salience</span>
+        <span><i style="background:rgba(255,255,255,.25);border-radius:50%"></i>covered before</span>
+      </div>
+    </div>
+    <p style="margin-top:14px;font-size:12.5px;color:var(--dim);font-family:var(--mono)">⌁ conceptual simulation of the selection dynamics — measured support-overlap results are in the paper</p>
+  </div>
+</section>
+
+<!-- ================= METHOD ================= -->
+<section id="method">
+  <div class="wrap">
+    <div class="rv"><span class="eyebrow">The fix</span></div>
+    <h2 class="rv d1">A selector with a <span class="gtext">memory</span>.</h2>
+    <p class="sub rv d2">TeMPO turns frame-wise selection into a frame-causal decision process. Three pieces, all training-free, all at inference time.</p>
+
+    <div class="steps">
+      <div class="step rv">
+        <div class="art">
+          <svg width="150" height="86" viewBox="0 0 150 86" fill="none">
+            <rect x="4" y="18" width="38" height="50" rx="7" stroke="#6d7cff" stroke-opacity=".6" stroke-width="1.5"/>
+            <rect x="56" y="18" width="38" height="50" rx="7" stroke="#6d7cff" stroke-opacity=".6" stroke-width="1.5"/>
+            <rect x="108" y="18" width="38" height="50" rx="7" stroke="#6d7cff" stroke-opacity=".6" stroke-width="1.5"/>
+            <rect class="pul"  x="11" y="26" width="10" height="10" rx="2.5" fill="#3ee6ff"/>
+            <rect class="pul"  x="25" y="40" width="10" height="10" rx="2.5" fill="#3ee6ff"/>
+            <rect class="pul2" x="63" y="30" width="10" height="10" rx="2.5" fill="#3ee6ff"/>
+            <rect class="pul2" x="77" y="50" width="10" height="10" rx="2.5" fill="#3ee6ff"/>
+            <rect class="pul3" x="115" y="26" width="10" height="10" rx="2.5" fill="#3ee6ff"/>
+            <rect class="pul3" x="129" y="46" width="10" height="10" rx="2.5" fill="#3ee6ff"/>
+            <path d="M42 43h14m38 0h14" stroke="#3ee6ff" stroke-opacity=".7" stroke-width="1.5" stroke-dasharray="3 3"/>
+            <path d="M46 39l6 4-6 4m46-8l6 4-6 4" stroke="#3ee6ff" stroke-opacity=".7" stroke-width="1.5" fill="none"/>
+          </svg>
+        </div>
+        <div class="num">01</div>
+        <h3>Committed-support memory</h3>
+        <p>The retained support of previous frames is kept as a compact, permutation-invariant set of metric features — a causal record of what the LLM has already received.</p>
+      </div>
+      <div class="step rv d1">
+        <div class="art">
+          <svg width="150" height="86" viewBox="0 0 150 86" fill="none">
+            <line x1="18" y1="72" x2="138" y2="72" stroke="#5f6a80" stroke-width="1.2"/>
+            <rect x="26"  y="34" width="12" height="38" rx="3" fill="#6d7cff" opacity=".35"/>
+            <rect x="48"  y="46" width="12" height="26" rx="3" fill="#6d7cff" opacity=".35"/>
+            <rect class="pul" x="70" y="14" width="12" height="58" rx="3" fill="url(#gg)"/>
+            <rect x="92"  y="52" width="12" height="20" rx="3" fill="#6d7cff" opacity=".35"/>
+            <rect class="pul2" x="114" y="26" width="12" height="46" rx="3" fill="url(#gg)"/>
+            <defs><linearGradient id="gg" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#3ee6ff"/><stop offset="1" stop-color="#6d7cff"/></linearGradient></defs>
+            <path d="M32 28c10-14 30-16 44-10" stroke="#ff5d7a" stroke-opacity=".7" stroke-width="1.4" stroke-dasharray="3 3" fill="none"/>
+            <text x="20" y="22" font-family="JetBrains Mono" font-size="9" fill="#ff5d7a" opacity=".9">already explained ↓</text>
+          </svg>
+        </div>
+        <div class="num">02</div>
+        <h3>Residual-energy selection</h3>
+        <p>Each candidate is scored by the energy it still explains after projecting out committed and already-selected directions — novelty over noise, blended with query relevance.</p>
+      </div>
+      <div class="step rv d2">
+        <div class="art">
+          <svg width="150" height="86" viewBox="0 0 150 86" fill="none">
+            <circle class="pul" cx="75" cy="43" r="13" fill="#3ddc97" opacity=".9"/>
+            <circle cx="34" cy="22" r="5" fill="#98a3b8" opacity=".5"/>
+            <circle cx="112" cy="18" r="5" fill="#98a3b8" opacity=".5"/>
+            <circle cx="28" cy="62" r="5" fill="#98a3b8" opacity=".5"/>
+            <circle cx="118" cy="64" r="5" fill="#98a3b8" opacity=".5"/>
+            <path d="M39 25 66 38M108 21 85 36M33 60 63 48M113 61 86 48" stroke="#3ddc97" stroke-opacity=".55" stroke-width="1.4" stroke-dasharray="3 3"/>
+            <circle cx="75" cy="43" r="21" stroke="#3ddc97" stroke-opacity=".3" stroke-width="1.2" stroke-dasharray="2 4"/>
+          </svg>
+        </div>
+        <div class="num">03</div>
+        <h3>Neighborhood fusion</h3>
+        <p>Discarded tokens are folded into their nearest retained neighbors with similarity weights — local coverage is restored without adding a single token.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= PIPELINE ================= -->
+<section id="pipeline">
+  <div class="wrap">
+    <div class="rv"><span class="eyebrow">Architecture</span></div>
+    <h2 class="rv d1">One pass. Two stages. <span class="gtext">Zero retraining.</span></h2>
+    <p class="sub rv d2">Compression runs between the projector and the language model: Stage 1 selects the committed support under the memory, Stage 2 refines it with parameter-free fusion — then writes the support back for the next frame.</p>
+    <div class="window rv d2" id="tiltwin">
+      <div class="winbar"><i></i><i></i><i></i><span>tempo · frame-causal compression pipeline</span></div>
+      <img src="framework.png" alt="TeMPO framework: committed-support selection and local refinement inside a multimodal LLM pipeline" loading="lazy">
+    </div>
+  </div>
+</section>
+
+<!-- ================= FEATURES ================= -->
+<section id="features">
+  <div class="wrap">
+    <div class="rv"><span class="eyebrow">Why TeMPO</span></div>
+    <h2 class="rv d1">Built like a product, not a patch.</h2>
+    <div class="feats">
+      <div class="feat rv"><div class="ico">⚡</div><h3>Training-free</h3><p>Drops in at inference. Weights, projector, and tokenizer stay untouched.</p></div>
+      <div class="feat rv d1"><div class="ico">🧠</div><h3>Frame-causal by design</h3><p>Strictly online — no look-ahead, no second pass. Streaming-friendly.</p></div>
+      <div class="feat rv d2"><div class="ico">🎛️</div><h3>One knob that matters</h3><p><code style="font-family:var(--mono);color:var(--cyan)">RETAIN_RATIO</code> sets the budget. Everything else has sensible defaults.</p></div>
+      <div class="feat rv"><div class="ico">🧩</div><h3>Budget-neutral fusion</h3><p>Recovers local coverage from discarded tokens at zero extra token cost.</p></div>
+      <div class="feat rv d1"><div class="ico">📦</div><h3>Batteries included</h3><p>Vendored LLaVA-NeXT + lmms-eval with five video benchmarks and one-command scripts.</p></div>
+      <div class="feat rv d2"><div class="ico">🪪</div><h3>Apache-2.0</h3><p>Permissive license, readable reference implementation alongside the fast one.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= QUICKSTART ================= -->
+<section id="quickstart">
+  <div class="wrap">
+    <div class="rv"><span class="eyebrow">Quick start</span></div>
+    <h2 class="rv d1">Up and running in a <span class="gtext">minute</span>.</h2>
+    <div class="codebox rv d1">
+      <div class="tabs">
+        <button class="tab on" data-c="c1">Python</button>
+        <button class="tab" data-c="c2">Evaluate</button>
+        <button class="tab" data-c="c3">Demo</button>
+        <button class="copy" id="copycode">copy</button>
+      </div>
+      <div class="codes">
+<pre id="c1" class="on"><span class="kw">from</span> llava.model.builder <span class="kw">import</span> load_pretrained_model
+<span class="kw">from</span> tempo <span class="kw">import</span> tempo
+
+tokenizer, model, processor, _ = <span class="fn">load_pretrained_model</span>(
+    <span class="st">"lmms-lab/llava-onevision-qwen2-7b-ov"</span>, <span class="kw">None</span>, <span class="st">"llava_qwen"</span>,
+    device_map=<span class="st">"auto"</span>, multimodal=<span class="kw">True</span>,
+)
+
+model = <span class="fn">tempo</span>(model)   <span class="cm"># ← visual tokens are now compressed at inference</span></pre>
+<pre id="c2"><span class="cm"># four video benchmarks, 10% token budget, one command</span>
+<span class="nm">RETAIN_RATIO</span>=0.10 bash scripts/eval_ov7b_tempo.sh
+
+<span class="cm"># LLaVA-Video backbone</span>
+<span class="nm">RETAIN_RATIO</span>=0.10 bash scripts/eval_llava_video_tempo.sh
+
+<span class="cm"># vanilla control under the identical harness: just unset WRAPPER</span></pre>
+<pre id="c3"><span class="cm"># single-video question answering</span>
+<span class="nm">RETAIN_RATIO</span>=0.10 python demo.py \
+    --video kitchen.mp4 \
+    --question <span class="st">"What happens after he opens the pot lid?"</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= CONFIG ================= -->
+<section id="config">
+  <div class="wrap">
+    <div class="rv"><span class="eyebrow">Configuration</span></div>
+    <h2 class="rv d1">Four knobs. Sensible defaults.</h2>
+    <p class="sub rv d2">All configuration is environment variables, read at inference time — nothing to subclass, nothing to rebuild.</p>
+    <div class="conf rv d2">
+      <div class="confrow head"><span>variable</span><span>default</span><span>what it does</span></div>
+      <div class="confrow"><code>WRAPPER</code><span class="def">—</span><span class="desc">Method selector for lmms-eval runs: <b>tempo</b> (vectorized) or <b>tempo_v1</b> (loop-form reference).</span></div>
+      <div class="confrow"><code>RETAIN_RATIO</code><span class="def">0.25</span><span class="desc">Fraction of visual tokens retained per frame — the budget. 0.10 keeps 72 of 729 tokens.</span></div>
+      <div class="confrow"><code>TEXT_ALPHA</code><span class="def">0.15</span><span class="desc">Weight of text-conditioned relevance in the joint selection score.</span></div>
+      <div class="confrow"><code>TEMPO_BASIS_CAP</code><span class="def">48</span><span class="desc">Size of the committed-support memory — basis vectors carried across frames.</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= CITATION ================= -->
+<section id="citation">
+  <div class="wrap">
+    <div class="rv"><span class="eyebrow">Citation</span></div>
+    <h2 class="rv d1">Cite TeMPO</h2>
+    <div class="cite rv d1"><button class="copy" id="copycite">copy</button><span id="citetext">@inproceedings{lai2026tempo,
+  title     = {TeMPO: Frame-Causal Token Compression for Video Reasoning},
+  author    = {Lai, Yingxin and Xu, Bo and Pan, Yun-ze and Zhu, Zhiliang
+               and Sun, Baigui and Liu, Yang},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2026}
+}</span></div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap frow">
+    <div>
+      <div class="logo" style="margin-bottom:10px"><span class="cube">T</span>TeMPO</div>
+      <div style="max-width:420px">Yingxin Lai, Bo Xu, Yun-ze Pan, Zhiliang Zhu, Baigui Sun, Yang Liu<br>
+      Xiamen University · Yun Innovative Lab, SANY Group</div>
+    </div>
+    <div style="display:flex;gap:40px;flex-wrap:wrap">
+      <div><b style="color:var(--ink)">Project</b><br><a href="https://github.com/laiyingxin2/TeMPO">GitHub</a><br><a href="#citation">Paper · NeurIPS 2026</a></div>
+      <div><b style="color:var(--ink)">Built on</b><br><a href="https://github.com/LLaVA-VL/LLaVA-NeXT" target="_blank" rel="noopener">LLaVA-NeXT</a><br><a href="https://github.com/EvolvingLMMs-Lab/lmms-eval" target="_blank" rel="noopener">lmms-eval</a></div>
+    </div>
+  </div>
+  <div class="wrap" style="margin-top:30px;color:var(--dim);font-size:12.5px">Apache License 2.0 · © 2026 TeMPO authors</div>
+</footer>
+
+<div class="toast" id="toast">Copied ✓</div>
+
+<script>
+/* ============ utilities ============ */
+const $=s=>document.querySelector(s), $$=s=>document.querySelectorAll(s);
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('show');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),1600)}
+
+/* ============ scroll reveal ============ */
+const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}),{threshold:.12});
+$$('.rv').forEach(el=>io.observe(el));
+
+/* ============ hero typing ============ */
+(function(){
+  const el=$('#typecode');
+  const html='<span class="c">$ </span><span class="k">model</span> = <span class="f">tempo</span>(<span class="k">model</span>)  <span class="c"># done.</span>';
+  if(reduced){el.innerHTML=html;return}
+  const tmp=document.createElement('div');tmp.innerHTML=html;
+  const plain=tmp.textContent;let i=0;
+  const caret=document.createElement('span');caret.className='caret';el.after(caret);
+  (function tick(){
+    i++;el.textContent=plain.slice(0,i);
+    if(i<plain.length){setTimeout(tick,34+Math.random()*50)}
+    else{setTimeout(()=>{el.innerHTML=html},300)}
+  })();
+})();
+
+/* ============ pointer glow on feature cards ============ */
+$$('.feat').forEach(c=>c.addEventListener('pointermove',e=>{
+  const r=c.getBoundingClientRect();
+  c.style.setProperty('--mx',(e.clientX-r.left)+'px');
+  c.style.setProperty('--my',(e.clientY-r.top)+'px');
+}));
+
+/* ============ pipeline tilt ============ */
+(function(){
+  const w=$('#tiltwin');if(!w||reduced||!matchMedia('(pointer:fine)').matches)return;
+  w.addEventListener('pointermove',e=>{
+    const r=w.getBoundingClientRect();
+    const rx=((e.clientY-r.top)/r.height-.5)*-3.2, ry=((e.clientX-r.left)/r.width-.5)*3.2;
+    w.style.transform=`perspective(1100px) rotateX(${rx}deg) rotateY(${ry}deg)`;
+  });
+  w.addEventListener('pointerleave',()=>w.style.transform='');
+})();
+
+/* ============ quickstart tabs + copy ============ */
+$$('.tab').forEach(t=>t.addEventListener('click',()=>{
+  $$('.tab').forEach(x=>x.classList.remove('on'));$$('.codes pre').forEach(x=>x.classList.remove('on'));
+  t.classList.add('on');$('#'+t.dataset.c).classList.add('on');
+}));
+$('#copycode').addEventListener('click',()=>{
+  navigator.clipboard.writeText($('.codes pre.on').textContent).then(()=>toast('Code copied ✓'));
+});
+$('#copycite').addEventListener('click',()=>{
+  navigator.clipboard.writeText($('#citetext').textContent).then(()=>toast('BibTeX copied ✓'));
+});
+
+/* ============ selector-collapse simulation ============ */
+(function(){
+  const S=12,K=14,MEMCAP=64;
+  const gA=$('#gridA'),gB=$('#gridB');if(!gA)return;
+  const cellsA=[],cellsB=[];
+  for(let i=0;i<S*S;i++){const a=document.createElement('div');a.className='cc';gA.appendChild(a);cellsA.push(a);
+    const b=document.createElement('div');b.className='cc';gB.appendChild(b);cellsB.push(b)}
+  const rng=mulberry32(20261103);
+  let blobs=[{x:3.2,y:4.1,vx:.33,vy:.21},{x:8.4,y:7.3,vx:-.26,vy:.3}];
+  let prevA=new Set(),mem=[],memSet=new Set(),everA=new Set(),everB=new Set(),frame=0;
+  function salience(i){const x=i%S,y=(i/S)|0;let s=0;
+    for(const b of blobs){const d2=(x-b.x)**2+(y-b.y)**2;s+=Math.exp(-d2/7)}return s}
+  function topk(score){return score.map((v,i)=>[v,i]).sort((a,b)=>b[0]-a[0]).slice(0,K).map(p=>p[1])}
+  function step(){
+    frame++;
+    for(const b of blobs){b.x+=b.vx;b.y+=b.vy;
+      if(b.x<1.2||b.x>S-2.2)b.vx*=-1;if(b.y<1.2||b.y>S-2.2)b.vy*=-1}
+    const sal=[],noise=[];
+    for(let i=0;i<S*S;i++){sal.push(salience(i));noise.push(rng()*.12)}
+    const selA=topk(sal.map((s,i)=>s+noise[i]));
+    const selB=topk(sal.map((s,i)=>s+noise[i]-(memSet.has(i)?2.5:0)));
+    let rA=0,fA=0,rB=0,fB=0;
+    for(let i=0;i<S*S;i++){
+      const a=cellsA[i],b=cellsB[i];
+      a.className='cc';b.className='cc';
+      const alpha=Math.min(sal[i]*.3,.38);
+      a.style.background=alpha>.05?`rgba(109,124,255,${alpha})`:'';
+      b.style.background=a.style.background;
+      if(everA.has(i))a.classList.add('ever');
+      if(everB.has(i))b.classList.add('ever');
+    }
+    for(const i of selA){const reused=prevA.has(i);cellsA[i].style.background='';cellsA[i].classList.add(reused?'reuse':'fresh');reused?rA++:fA++;everA.add(i)}
+    for(const i of selB){const reused=memSet.has(i);cellsB[i].style.background='';cellsB[i].classList.add(reused?'reuse':'fresh');reused?rB++:fB++;everB.add(i)}
+    for(const i of selB){if(!memSet.has(i)){mem.push(i);memSet.add(i)}}
+    while(mem.length>MEMCAP){memSet.delete(mem.shift())}
+    prevA=new Set(selA);
+    $('#reuseA').textContent=rA;$('#freshA').textContent=fA;
+    $('#reuseB').textContent=rB;$('#freshB').textContent=fB;
+    $('#simframe').textContent=frame;
+    if(frame%90===0){everA.clear();everB.clear()}
+  }
+  let timer=null,playing=false;
+  function play(){if(playing)return;playing=true;$('#simplay').textContent='⏸';timer=setInterval(step,1150)}
+  function pause(){playing=false;$('#simplay').textContent='▶';clearInterval(timer)}
+  $('#simplay').addEventListener('click',()=>playing?pause():play());
+  step();
+  if(!reduced){
+    new IntersectionObserver(es=>es.forEach(e=>e.isIntersecting?play():pause()),{threshold:.25}).observe(gA);
+  }
+})();
+
+/* ============ inference walkthrough player ============ */
+(function(){
+  const EXAMPLES=[
+    {id:'cook',icon:'🍳',name:'Cooking',
+     frames:[['🧑‍🍳','prep'],['🔪','chop'],['🍲','pot'],['🫧','lid off'],['♨️','steam'],['🥣','taste']],
+     q:'What happens after he opens the pot lid?',
+     a:'After the lid comes off, steam rises from the pot. He stirs the soup, lifts a spoonful to taste it, and nods before turning the heat down.'},
+    {id:'goal',icon:'⚽',name:'Soccer',
+     frames:[['🏟️','pitch'],['🏃','run'],['⚽','dribble'],['🥅','box'],['🧤','dive'],['🎉','goal']],
+     q:'What happens after the striker runs into the box?',
+     a:'He cuts inside and shoots low to the left — the keeper dives but misses, the ball rolls into the net, and his teammates run over to celebrate.'},
+    {id:'cat',icon:'🐈',name:'Needle in a long video',
+     frames:[['🚪','door'],['🛋️','room'],['🚶','walk in'],['🪑','sit'],['🐈','cat!'],['😺','curl up']],
+     q:'When does the cat first appear, and what does it do?',
+     a:'The cat only shows up late in the clip — right after the man sits down, it jumps onto the couch, circles once, and curls up beside him.'}
+  ];
+  const GRID=64,KEEP=7,FPF=729,KEPT=72,NFRAMES=32;
+  const strip=$('#strip'),dgrid=$('#dgrid'),memrow=$('#memrow'),extabs=$('#extabs');
+  if(!strip)return;
+  const cells=[];for(let i=0;i<GRID;i++){const c=document.createElement('div');c.className='tc';dgrid.appendChild(c);cells.push(c)}
+  const memchips=[];for(let i=0;i<24;i++){const m=document.createElement('i');memrow.appendChild(m);memchips.push(m)}
+  EXAMPLES.forEach((ex,i)=>{
+    const b=document.createElement('button');b.className='extab'+(i===0?' on':'');
+    b.innerHTML=ex.icon+' '+ex.name;b.addEventListener('click',()=>load(i,true));extabs.appendChild(b);
+  });
+  const ctl=document.createElement('div');ctl.className='player-ctl';
+  ctl.innerHTML='<button class="pbtn" id="dplay" aria-label="play/pause">⏸</button><button class="pbtn" id="dreplay" aria-label="replay">↺</button>';
+  extabs.appendChild(ctl);
+
+  let cur=0,phase='idle',fi=0,ti=0,delivered=0,timer=null,playing=true;
+  const rng=mulberry32(7);
+
+  function setStage(s){['compress','prefill','decode'].forEach(k=>{
+    const el=$('#st-'+k);el.classList.remove('on','done');
+    const order=['compress','prefill','decode'];
+    if(order.indexOf(k)<order.indexOf(s))el.classList.add('done');
+    if(k===s)el.classList.add('on');
+  })}
+  function renderStrip(ex){
+    strip.innerHTML='';
+    ex.frames.forEach((f,i)=>{
+      const d=document.createElement('div');d.className='fr';d.id='fr'+i;
+      d.innerHTML=f[0]+'<span class="fi">f'+(i*6)+'</span>';
+      d.style.background=`linear-gradient(145deg,hsla(${225+i*9},70%,62%,.13),hsla(${190+i*8},80%,55%,.06))`;
+      strip.appendChild(d);
+    });
+  }
+  function clearGrid(){cells.forEach(c=>{c.className='tc'})}
+  function load(i,user){
+    cur=i;const ex=EXAMPLES[cur];
+    $$('.extab').forEach((t,j)=>t.classList.toggle('on',j===cur));
+    renderStrip(ex);clearGrid();
+    memchips.forEach(m=>m.classList.remove('on'));
+    $('#qbub').textContent=ex.q;$('#abub').textContent='';$('#acaret').style.display='none';
+    $('#kept').textContent='0';$('#delivered').textContent='0';$('#budgetbar').style.width='0%';
+    delivered=0;fi=0;ti=0;phase='compress';setStage('compress');
+    if(user)play();
+  }
+  function compressFrame(){
+    const ex=EXAMPLES[cur];
+    if(fi>0)$('#fr'+(fi-1)).classList.replace('cur','done');
+    if(fi>=ex.frames.length){phase='prefill';setStage('prefill');return}
+    $('#fr'+fi).classList.add('cur');
+    clearGrid();
+    // salient patch region drifts with frame index
+    const cx=1.5+fi*0.9+rng()*1.2, cy=2.5+Math.sin(fi*1.3)*1.6+rng();
+    const scored=[];
+    for(let i=0;i<GRID;i++){const x=i%8,y=(i/8)|0;
+      const s=Math.exp(-(((x-cx)**2+(y-cy)**2))/6)+rng()*.25;scored.push([s,i]);
+      if(s>.45)cells[i].classList.add('sal')}
+    scored.sort((a,b)=>b[0]-a[0]);
+    const keep=scored.slice(0,KEEP).map(p=>p[1]);
+    keep.forEach((i,j)=>setTimeout(()=>{cells[i].className='tc keep'},90*j));
+    setTimeout(()=>{scored.slice(KEEP,KEEP+10).forEach(p=>cells[p[1]].classList.add('drop'))},90*KEEP);
+    delivered+=KEPT;
+    $('#kept').textContent=KEPT;
+    $('#delivered').textContent=(delivered*(NFRAMES/ex.frames.length)|0).toLocaleString()+' / '+(FPF*NFRAMES).toLocaleString();
+    $('#budgetbar').style.width=(100*(fi+1)/ex.frames.length)+'%';
+    const upto=Math.min(memchips.length,(fi+1)*4);
+    for(let m=0;m<upto;m++)memchips[m].classList.add('on');
+    fi++;
+  }
+  function decodeTick(){
+    const ex=EXAMPLES[cur];
+    const words=ex.a.split(' ');
+    if(ti===0){$('#acaret').style.display='inline-block'}
+    if(ti<words.length){
+      $('#abub').textContent=words.slice(0,ti+1).join(' ');ti++;
+    }else{
+      $('#acaret').style.display='none';phase='hold';
+      setTimeout(()=>{if(playing)load((cur+1)%EXAMPLES.length)},3400);
+    }
+  }
+  function tick(){
+    if(!playing)return;
+    if(phase==='compress'){compressFrame();schedule(950)}
+    else if(phase==='prefill'){setStage('prefill');phase='predone';schedule(900)}
+    else if(phase==='predone'){setStage('decode');phase='decode';schedule(120)}
+    else if(phase==='decode'){decodeTick();schedule(95+rng()*120)}
+  }
+  function schedule(ms){clearTimeout(timer);timer=setTimeout(tick,ms)}
+  function play(){playing=true;$('#dplay').textContent='⏸';schedule(300)}
+  function pause(){playing=false;$('#dplay').textContent='▶';clearTimeout(timer)}
+  $('#extabs').addEventListener('click',e=>{
+    if(e.target.id==='dplay'){playing?pause():play()}
+    if(e.target.id==='dreplay'){load(cur,true)}
+  });
+  load(0,false);
+  if(reduced){pause();compressFrame()}
+  else new IntersectionObserver(es=>es.forEach(e=>e.isIntersecting?play():pause()),{threshold:.2}).observe(strip);
+})();
+</script>
+</body>
+</html>
